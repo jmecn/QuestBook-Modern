@@ -52,6 +52,11 @@ jobs:
       - name: Load config
         run: bash ci/run.sh env
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Download bundle
         if: github.event_name == 'workflow_run'
         uses: actions/download-artifact@v4

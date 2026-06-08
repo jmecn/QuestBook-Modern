@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# QuestBook-Modern CI — config, release resolution, export, deploy, site build.
 # Usage: bash ci/run.sh <command>
 set -euo pipefail
 
@@ -105,6 +104,12 @@ resolve_site_viewer_tag() {
     "${SITE_VIEWER_TAG:-${SITE_VIEWER_VERSION:-}}"
 }
 
+resolve_optimize_tag() {
+  resolve_github_release_ref \
+    "${OPTIMIZE_REPO:-jmecn/emi-bundle-optimize}" \
+    "${OPTIMIZE_TAG:-${OPTIMIZE_VERSION:-}}"
+}
+
 load_config() {
   local env_file="${CI_BUILD_ENV:-$CI_DIR/build.env}"
   if [[ ! -f "$env_file" ]]; then
@@ -126,7 +131,7 @@ load_config() {
   export MC_VERSION MC_ASSET_INDEX FORGE_BUILD
   export HMC_REPO HMC_VERSION MODPACK_DIR MODPACK_REPO
   export FQE_REPO FQE_VERSION MWE_REPO MWE_VERSION
-  export SITE_VIEWER_REPO SITE_VIEWER_VERSION NODE_VERSION
+  export SITE_VIEWER_REPO SITE_VIEWER_VERSION OPTIMIZE_REPO OPTIMIZE_VERSION NODE_VERSION
   export EXPORT_WARMUP_TICKS EXPORT_WORLD_DELAY_TICKS EXPORT_TIMEOUT_SECONDS
   export EXPORT_ROOT EXPORT_QUEST EXPORT_ROOT_DIR QUEST_SUBDIR SITE_OUTPUT_DIR RECIPE_BOOK_BASE_URL
   export EXPORT_ARTIFACT_NAME="${EXPORT_ARTIFACT_NAME:-quest-book}"
@@ -148,6 +153,8 @@ load_config() {
       printf 'MWE_VERSION=%s\n' "${MWE_VERSION:-}"
       printf 'SITE_VIEWER_REPO=%s\n' "${SITE_VIEWER_REPO:-jmecn/QuestBook-React}"
       printf 'SITE_VIEWER_VERSION=%s\n' "${SITE_VIEWER_VERSION:-}"
+      printf 'OPTIMIZE_REPO=%s\n' "${OPTIMIZE_REPO:-jmecn/emi-bundle-optimize}"
+      printf 'OPTIMIZE_VERSION=%s\n' "${OPTIMIZE_VERSION:-}"
       printf 'NODE_VERSION=%s\n' "${NODE_VERSION:-24}"
       printf 'EXPORT_WARMUP_TICKS=%s\n' "$EXPORT_WARMUP_TICKS"
       printf 'EXPORT_WORLD_DELAY_TICKS=%s\n' "$EXPORT_WORLD_DELAY_TICKS"
@@ -170,7 +177,7 @@ print_versions() {
     unset MODPACK_TAG
   fi
 
-  local modpack fqe mwe hmc viewer
+  local modpack fqe mwe hmc viewer optimize
   modpack="${MODPACK_TAG:-$(resolve_modpack_tag)}"
   if [[ -z "$modpack" ]]; then
     echo "::error::Could not resolve Modpack-Modern release tag" >&2
@@ -181,12 +188,14 @@ print_versions() {
   mwe="$(resolve_mwe_tag)" || exit 1
   hmc="$(resolve_hmc_tag)" || exit 1
   viewer="$(resolve_site_viewer_tag)" || exit 1
+  optimize="$(resolve_optimize_tag)" || exit 1
 
   export MODPACK_TAG="$modpack"
   export FQE_TAG="$fqe"
   export MWE_TAG="$mwe"
   export HMC_TAG="$hmc"
   export SITE_VIEWER_TAG="$viewer"
+  export OPTIMIZE_TAG="$optimize"
 
   if [[ -n "${GITHUB_ENV:-}" ]]; then
     {
@@ -195,10 +204,12 @@ print_versions() {
       printf 'MWE_TAG=%s\n' "$mwe"
       printf 'HMC_TAG=%s\n' "$hmc"
       printf 'SITE_VIEWER_TAG=%s\n' "$viewer"
+      printf 'OPTIMIZE_TAG=%s\n' "$optimize"
       printf 'FQE_VERSION=%s\n' "$fqe"
       printf 'MWE_VERSION=%s\n' "$mwe"
       printf 'HMC_VERSION=%s\n' "$hmc"
       printf 'SITE_VIEWER_VERSION=%s\n' "$viewer"
+      printf 'OPTIMIZE_VERSION=%s\n' "$optimize"
     } >> "$GITHUB_ENV"
   fi
 
@@ -208,6 +219,7 @@ print_versions() {
     "ftb-quest-export=${fqe}" \
     "minecraft-web-export=${mwe}" \
     "questbook-react=${viewer}" \
+    "emi-bundle-optimize=${optimize}" \
     "minecraft=${MC_VERSION} (assets ${MC_ASSET_INDEX})" \
     "forge_build=${FORGE_BUILD}" \
     "headlessmc=${hmc}"
@@ -223,6 +235,7 @@ print_versions() {
       echo "| ftb-quest-export | \`${fqe}\` |"
       echo "| minecraft-web-export | \`${mwe}\` |"
       echo "| QuestBook-React | \`${viewer}\` |"
+      echo "| emi-bundle-optimize | \`${optimize}\` |"
       echo "| Minecraft / Forge | \`${MC_VERSION}\` / \`${FORGE_BUILD}\` |"
       echo "| HeadlessMC | \`${hmc}\` |"
     } >> "$GITHUB_STEP_SUMMARY"
@@ -685,12 +698,67 @@ EOF
   echo "Wrote site-config.json (recipeBookBaseUrl=${url:-<empty>})"
 }
 
+optimize_quest_export_icons() {
+  local site_dir="${SITE_OUTPUT_DIR:?SITE_OUTPUT_DIR required}"
+  local assets_dir="$site_dir/data/quest-export/assets"
+  local icons_dir="$assets_dir/icons"
+
+  if [[ ! -d "$icons_dir" ]]; then
+    echo "::error::Missing $icons_dir — quest-export has no icon atlas" >&2
+    return 1
+  fi
+  if [[ ! -f "$assets_dir/bundle.json" ]]; then
+    echo "::warning::Missing $assets_dir/bundle.json — skip icon WebP optimize (needs newer ftb-quest-export)"
+    return 0
+  fi
+
+  if ! command -v npx >/dev/null 2>&1; then
+    echo "::error::npx required for emi-bundle-optimize (setup Node.js in deploy workflow)" >&2
+    return 1
+  fi
+
+  local optimize_tag ver staging
+  optimize_tag="$(resolve_optimize_tag)" || return 1
+  ver="${optimize_tag#v}"
+  staging="$(mktemp -d)"
+
+  echo "::group::emi-bundle-optimize quest icons @ ${optimize_tag}"
+  if ! npx --yes "emi-bundle-optimize@${ver}" optimize \
+    --in "$assets_dir" \
+    --out "$staging/assets-opt" \
+    --force \
+    --no-recipe-webp; then
+    rm -rf "$staging"
+    echo "::error::emi-bundle-optimize failed for $assets_dir" >&2
+    return 1
+  fi
+  echo "::endgroup::"
+
+  rm -rf "$assets_dir"
+  mv "$staging/assets-opt" "$assets_dir"
+  rm -rf "$staging"
+
+  local first_webp
+  first_webp="$(find "$icons_dir" -maxdepth 1 -name 'atlas-*.webp' | head -1)"
+  if [[ -z "$first_webp" ]]; then
+    echo "::error::No atlas-*.webp under $icons_dir after optimize" >&2
+    return 1
+  fi
+  if compgen -G "$icons_dir/atlas-*.png" > /dev/null; then
+    echo "::error::PNG icon atlases remain under $icons_dir after optimize" >&2
+    return 1
+  fi
+
+  echo "Quest icon atlases optimized to WebP ($assets_dir)"
+}
+
 assemble_deploy_site() {
   local site_dir="${SITE_OUTPUT_DIR:?SITE_OUTPUT_DIR required}"
 
   cp -f "$QBM_ROOT/language.json" "$site_dir/language.json"
   write_site_config
   stage_quest_export
+  optimize_quest_export_icons
 
   if ! compgen -G "$site_dir/assets/*.js" > /dev/null; then
     echo "::error::Missing $site_dir/assets/*.js — quest site release may be corrupt" >&2
@@ -722,7 +790,7 @@ Granular (local debugging):
   env, print-versions, checkout-modpack, prepare-bundle-id, export-languages,
   install-mods, setup-hmc, launch-export, write-export-meta,
   resolve-bundle-id, extract-bundle, fetch-bundle,
-  fetch-quest-site, assemble-deploy-site
+  fetch-quest-site, optimize-quest-icons, assemble-deploy-site
 EOF
 }
 
@@ -755,6 +823,10 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     fetch-quest-site)
       load_config
       fetch_quest_site_release "$@"
+      ;;
+    optimize-quest-icons)
+      load_config
+      optimize_quest_export_icons "$@"
       ;;
     assemble-deploy-site)
       load_config
