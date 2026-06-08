@@ -1,0 +1,18 @@
+# CI / export artifacts
+Modpack-Modern/
+export/
+export-meta/
+quest-export-*.tar.gz
+headlessmc-launcher-*.jar
+ftb-quest-export-*.jar
+minecraft-web-export-*.jar
+HeadlessMC/
+
+# Deploy staging (React site tarball extracted here)
+site/**
+!site/.gitkeep
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/

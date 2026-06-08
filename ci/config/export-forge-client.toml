@@ -1,0 +1,11 @@
+# Copied to Modpack-Modern/config/forge-client.toml before headless CI launch.
+
+[client]
+	alwaysSetupTerrainOffThread = false
+	experimentalForgeLightPipelineEnabled = false
+	showLoadWarnings = false
+	useCombinedDepthStencilAttachment = false
+	compressLanIPv6Addresses = true
+	calculateAllNormals = false
+	stabilizeDirectionGetNearest = true
+	allowMipmapLowering = true

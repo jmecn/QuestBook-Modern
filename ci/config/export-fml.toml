@@ -1,0 +1,16 @@
+# Copied to Modpack-Modern/config/fml.toml before headless CI launch.
+earlyWindowControl = false
+maxThreads = 1
+
+earlyWindowHeight = 480
+earlyWindowFBScale = 1
+versionCheck = false
+earlyWindowProvider = "fmlearlywindow"
+earlyWindowWidth = 854
+earlyWindowMaximized = false
+defaultConfigPath = "defaultconfigs"
+disableOptimizedDFU = true
+earlyWindowSkipGLVersions = []
+earlyWindowSquir = false
+earlyWindowShowCPU = false
+earlyWindowLogHelpMessage = false
