@@ -112,13 +112,13 @@ resolve_hmc_tag() {
 
 resolve_site_viewer_tag() {
   resolve_github_release_ref \
-    "${SITE_VIEWER_REPO:-TerraFirmaGreg-Team/QuestBook-React}" \
+    "${SITE_VIEWER_REPO:-jmecn/QuestBook-React}" \
     "${SITE_VIEWER_TAG:-${SITE_VIEWER_VERSION:-}}"
 }
 
 resolve_site_viewer_version() {
   resolve_github_release_version \
-    "${SITE_VIEWER_REPO:-TerraFirmaGreg-Team/QuestBook-React}" \
+    "${SITE_VIEWER_REPO:-jmecn/QuestBook-React}" \
     "${SITE_VIEWER_TAG:-${SITE_VIEWER_VERSION:-}}"
 }
 
@@ -618,7 +618,7 @@ load_config() {
       printf 'FQE_VERSION=%s\n' "${FQE_VERSION:-}"
       printf 'MWE_REPO=%s\n' "${MWE_REPO:-jmecn/minecraft-web-export}"
       printf 'MWE_VERSION=%s\n' "${MWE_VERSION:-}"
-      printf 'SITE_VIEWER_REPO=%s\n' "${SITE_VIEWER_REPO:-TerraFirmaGreg-Team/QuestBook-React}"
+      printf 'SITE_VIEWER_REPO=%s\n' "${SITE_VIEWER_REPO:-jmecn/QuestBook-React}"
       printf 'SITE_VIEWER_VERSION=%s\n' "${SITE_VIEWER_VERSION:-}"
       printf 'OPTIMIZE_REPO=%s\n' "${OPTIMIZE_REPO:-jmecn/emi-bundle-optimize}"
       printf 'OPTIMIZE_VERSION=%s\n' "${OPTIMIZE_VERSION:-}"
@@ -1141,7 +1141,7 @@ fetch_bundle() {
 }
 
 fetch_quest_site_release() {
-  local repo="${SITE_VIEWER_REPO:-TerraFirmaGreg-Team/QuestBook-React}"
+  local repo="${SITE_VIEWER_REPO:-jmecn/QuestBook-React}"
   local site_dir="${SITE_OUTPUT_DIR:?SITE_OUTPUT_DIR required}"
   local version tag
 
