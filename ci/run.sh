@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
+# QuestBook-Modern CI — config, release resolution, export, deploy, site build.
 # Usage: bash ci/run.sh <command>
 set -euo pipefail
 
 CI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CI_SCRIPTS="${CI_DIR}/scripts"
 QBM_ROOT="$(cd "$CI_DIR/.." && pwd)"
+
+ci_node() {
+  node "$CI_SCRIPTS/$1" "${@:2}"
+}
 
 # GitHub semver release resolution (git ls-remote; empty ci/build.env pin = latest tag).
 github_repo_git_url() {
@@ -74,6 +80,12 @@ resolve_github_release_ref() {
   resolve_latest_semver_release_tag "$repo_spec"
 }
 
+resolve_github_release_version() {
+  local ref
+  ref="$(resolve_github_release_ref "$@")" || return 1
+  echo "${ref#v}"
+}
+
 resolve_modpack_tag() {
   resolve_github_release_ref \
     "${MODPACK_REPO:-https://github.com/TerraFirmaGreg-Team/Modpack-Modern.git}" \
@@ -100,7 +112,13 @@ resolve_hmc_tag() {
 
 resolve_site_viewer_tag() {
   resolve_github_release_ref \
-    "${SITE_VIEWER_REPO:-jmecn/QuestBook-React}" \
+    "${SITE_VIEWER_REPO:-TerraFirmaGreg-Team/QuestBook-React}" \
+    "${SITE_VIEWER_TAG:-${SITE_VIEWER_VERSION:-}}"
+}
+
+resolve_site_viewer_version() {
+  resolve_github_release_version \
+    "${SITE_VIEWER_REPO:-TerraFirmaGreg-Team/QuestBook-React}" \
     "${SITE_VIEWER_TAG:-${SITE_VIEWER_VERSION:-}}"
 }
 
@@ -108,6 +126,455 @@ resolve_optimize_tag() {
   resolve_github_release_ref \
     "${OPTIMIZE_REPO:-jmecn/emi-bundle-optimize}" \
     "${OPTIMIZE_TAG:-${OPTIMIZE_VERSION:-}}"
+}
+
+resolve_optimize_version() {
+  resolve_github_release_version \
+    "${OPTIMIZE_REPO:-jmecn/emi-bundle-optimize}" \
+    "${OPTIMIZE_TAG:-${OPTIMIZE_VERSION:-}}"
+}
+
+resolve_fqe_version() {
+  resolve_github_release_version \
+    "${FQE_REPO:-jmecn/ftb-quest-export}" \
+    "${FQE_TAG:-${FQE_VERSION:-}}"
+}
+
+resolve_mwe_version() {
+  resolve_github_release_version \
+    "${MWE_REPO:-jmecn/minecraft-web-export}" \
+    "${MWE_TAG:-${MWE_VERSION:-}}"
+}
+
+resolve_hmc_version() {
+  resolve_github_release_version \
+    "${HMC_REPO:-3arthqu4ke/headlessmc}" \
+    "${HMC_TAG:-${HMC_VERSION:-}}"
+}
+
+_normalize_version_ref() {
+  echo "${1#v}"
+}
+
+resolve_quest_book_modern_commit() {
+  local sha
+  if ! sha="$(git -C "$QBM_ROOT" rev-parse HEAD 2>/dev/null)"; then
+    echo "::error::Could not resolve QuestBook-Modern commit (git rev-parse HEAD)" >&2
+    return 1
+  fi
+  printf '%s' "$sha"
+}
+
+resolve_build_version_refs() {
+  load_config
+
+  if [[ -z "${MODPACK_TAG:-}" ]]; then
+    unset MODPACK_TAG
+  fi
+
+  BUILD_REF_MODPACK="$(_normalize_version_ref "$(resolve_modpack_tag)")" || return 1
+  BUILD_REF_FQE="$(_normalize_version_ref "$(resolve_fqe_version)")" || return 1
+  BUILD_REF_MWE="$(_normalize_version_ref "$(resolve_mwe_version)")" || return 1
+  BUILD_REF_SITE="$(_normalize_version_ref "$(resolve_site_viewer_version)")" || return 1
+  BUILD_REF_OPTIMIZE="$(_normalize_version_ref "$(resolve_optimize_version)")" || return 1
+  BUILD_REF_HMC="$(_normalize_version_ref "$(resolve_hmc_version)")" || return 1
+  BUILD_REF_QBM="$(_normalize_version_ref "$(resolve_quest_book_modern_commit)")" || return 1
+}
+
+resolve_build_json_url() {
+  if [[ -n "${BUILD_JSON_URL:-}" ]]; then
+    echo "$BUILD_JSON_URL"
+    return 0
+  fi
+  if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
+    echo "https://${GITHUB_REPOSITORY%/*}.github.io/${GITHUB_REPOSITORY#*/}/build.json"
+    return 0
+  fi
+  return 1
+}
+
+fetch_recorded_build_json() {
+  local dest="${1:?dest path required}"
+  local url local_site
+
+  if url="$(resolve_build_json_url 2>/dev/null)"; then
+    if curl -fsSL --retry 2 --retry-delay 1 "$url" -o "$dest" 2>/dev/null; then
+      echo "Loaded published build.json from ${url}" >&2
+      return 0
+    fi
+    echo "No published build.json at ${url} — first deploy or site not ready" >&2
+  fi
+
+  local_site="${QBM_ROOT}/${SITE_OUTPUT_DIR:-site}/build.json"
+  if [[ -f "$local_site" ]]; then
+    cp "$local_site" "$dest"
+    echo "Using local ${local_site}" >&2
+    return 0
+  fi
+
+  echo '{}' > "$dest"
+}
+
+_write_build_versions_json() {
+  local out="${1:?output path required}"
+  local bundle_id="${BUNDLE_ID:?BUNDLE_ID required}"
+  local hash_len="${SITE_RELEASE_HASH_LENGTH:-7}"
+  resolve_build_version_refs || return 1
+  ci_node write-build-versions.mjs \
+    "$BUILD_REF_MODPACK" \
+    "$BUILD_REF_FQE" \
+    "$BUILD_REF_MWE" \
+    "$BUILD_REF_SITE" \
+    "$BUILD_REF_OPTIMIZE" \
+    "$BUILD_REF_HMC" \
+    "$BUILD_REF_QBM" \
+    "$bundle_id" \
+    "$hash_len" \
+    "$out"
+}
+
+_kv_from_lines() {
+  local key="${1:?key required}"
+  local lines="${2:?lines required}"
+  printf '%s' "$lines" | grep -E "^${key}=" | tail -1 | cut -d= -f2-
+}
+
+_run_check_build_mjs() {
+  local build_json="${1:?build.json path required}"
+  local bundle_id="${2:?bundle id required}"
+  (
+    unset GITHUB_OUTPUT
+    ci_node check-build-changes.mjs \
+      "$build_json" \
+      "$bundle_id" \
+      "${SITE_RELEASE_HASH_LENGTH:-7}" \
+      "$BUILD_REF_MODPACK" \
+      "$BUILD_REF_FQE" \
+      "$BUILD_REF_MWE" \
+      "$BUILD_REF_SITE" \
+      "$BUILD_REF_OPTIMIZE" \
+      "$BUILD_REF_HMC" \
+      "$BUILD_REF_QBM"
+  )
+}
+
+check_build_changes() {
+  local build_json
+  build_json="$(mktemp)"
+  resolve_build_version_refs || exit 1
+  fetch_recorded_build_json "$build_json"
+
+  ci_node check-build-changes.mjs \
+    "$build_json" \
+    "${BUNDLE_ID:?BUNDLE_ID required — run prepare-check-bundle first}" \
+    "${SITE_RELEASE_HASH_LENGTH:-7}" \
+    "$BUILD_REF_MODPACK" \
+    "$BUILD_REF_FQE" \
+    "$BUILD_REF_MWE" \
+    "$BUILD_REF_SITE" \
+    "$BUILD_REF_OPTIMIZE" \
+    "$BUILD_REF_HMC" \
+    "$BUILD_REF_QBM"
+  rm -f "$build_json"
+}
+
+_resolve_expected_release_tag() {
+  local tmp release_tag
+  tmp="$(mktemp)"
+  _write_build_versions_json "$tmp" || return 1
+  release_tag="$(ci_node read-release-tag.mjs "$tmp")"
+  rm -f "$tmp"
+  printf '%s' "$release_tag"
+}
+
+_site_release_asset_exists() {
+  local release_tag="${1:?release tag required}"
+  local asset_name="${SITE_RELEASE_ASSET_NAME:-quest-book-site.tar.gz}"
+  gh release view "$release_tag" \
+    --repo "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY required}" \
+    --json assets \
+    --jq ".assets[].name" 2>/dev/null | grep -Fxq "$asset_name"
+}
+
+_probe_site_release() {
+  local release_tag="${1:?release tag required}"
+  local asset_name="${SITE_RELEASE_ASSET_NAME:-quest-book-site.tar.gz}"
+
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "::warning::gh CLI unavailable — cannot probe site release" >&2
+    echo "true"
+    return 0
+  fi
+  if [[ -z "${GH_TOKEN:-}" ]]; then
+    echo "::warning::GH_TOKEN unset — cannot probe site release" >&2
+    echo "true"
+    return 0
+  fi
+  if gh release view "$release_tag" --repo "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY required}" >/dev/null 2>&1; then
+    if _site_release_asset_exists "$release_tag"; then
+      echo "Site release probe hit: ${release_tag} (${asset_name})" >&2
+      echo "false"
+      return 0
+    fi
+    echo "Deploy required: release ${release_tag} exists but asset ${asset_name} is missing" >&2
+    echo "true"
+    return 0
+  fi
+  echo "Deploy required: site release ${release_tag} not found" >&2
+  echo "true"
+}
+
+probe_site_release() {
+  load_config
+
+  local release_tag="${EXPECTED_RELEASE_TAG:-}"
+  local probe_needed
+
+  if [[ -z "$release_tag" ]]; then
+    release_tag="$(_resolve_expected_release_tag)" || exit 1
+  fi
+
+  probe_needed="$(_probe_site_release "$release_tag")"
+
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    {
+      echo "release_tag=${release_tag}"
+      echo "release_probe_needed=${probe_needed}"
+    } >> "$GITHUB_OUTPUT"
+  else
+    echo "release_tag=${release_tag}"
+    echo "release_probe_needed=${probe_needed}"
+  fi
+}
+
+finalize_deploy_decision() {
+  local deploy_needed=false
+
+  if [[ "${VERSION_DEPLOY_NEEDED:-false}" == "true" ]]; then
+    deploy_needed=true
+    echo "Deploy required: version or build.json metadata gate" >&2
+  elif [[ "${RELEASE_PROBE_NEEDED:-false}" == "true" ]]; then
+    deploy_needed=true
+    echo "Deploy required: site release missing or incomplete (${EXPECTED_RELEASE_TAG:-})" >&2
+  else
+    echo "Deploy skipped: versions, build.json metadata, and site release all match" >&2
+  fi
+
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "deploy_needed=${deploy_needed}" >> "$GITHUB_OUTPUT"
+  else
+    echo "deploy_needed=${deploy_needed}"
+  fi
+}
+
+check_gates() {
+  load_config
+
+  local tag="${MODPACK_TAG:-}"
+  local build_json mjs_out
+  local bundle_id cache_key fingerprint
+  local version_export_needed version_deploy_needed expected_release_tag release_probe_needed
+  local deploy_needed=false
+
+  if [[ -z "$tag" ]]; then
+    tag="$(resolve_modpack_tag)" || exit 1
+  fi
+  export MODPACK_TAG="$tag"
+  bundle_id="$(bundle_id_for_tag "$tag")"
+  export BUNDLE_ID="$bundle_id"
+  fingerprint="$(export_cache_fingerprint)" || exit 1
+  cache_key="$(export_cache_key "$bundle_id" "$fingerprint")"
+
+  build_json="$(mktemp)"
+  resolve_build_version_refs || exit 1
+  fetch_recorded_build_json "$build_json"
+  mjs_out="$(_run_check_build_mjs "$build_json" "$bundle_id")"
+  rm -f "$build_json"
+
+  version_export_needed="$(_kv_from_lines export_needed "$mjs_out")"
+  version_deploy_needed="$(_kv_from_lines version_deploy_needed "$mjs_out")"
+  expected_release_tag="$(_kv_from_lines expected_release_tag "$mjs_out")"
+
+  release_probe_needed="$(_probe_site_release "$expected_release_tag")"
+
+  if [[ "$version_deploy_needed" == "true" || "$release_probe_needed" == "true" || "${FORCE_EXPORT:-}" == "true" ]]; then
+    deploy_needed=true
+    if [[ "${FORCE_EXPORT:-}" == "true" ]]; then
+      echo "Deploy required: force_export" >&2
+    elif [[ "$version_deploy_needed" == "true" ]]; then
+      echo "Deploy required: version or build.json metadata gate" >&2
+    else
+      echo "Deploy required: site release missing or incomplete (${expected_release_tag})" >&2
+    fi
+  else
+    echo "Deploy skipped: versions, build.json metadata, and site release all match" >&2
+  fi
+
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    {
+      echo "bundle_id=${bundle_id}"
+      echo "modpack_tag=${tag}"
+      echo "export_cache_key=${cache_key}"
+      echo "version_export_needed=${version_export_needed}"
+      echo "expected_release_tag=${expected_release_tag}"
+      echo "deploy_needed=${deploy_needed}"
+    } >> "$GITHUB_OUTPUT"
+  else
+    echo "bundle_id=${bundle_id}"
+    echo "modpack_tag=${tag}"
+    echo "export_cache_key=${cache_key}"
+    echo "version_export_needed=${version_export_needed}"
+    echo "expected_release_tag=${expected_release_tag}"
+    echo "deploy_needed=${deploy_needed}"
+  fi
+
+  echo "check bundle_id=${bundle_id} export_cache_key=${cache_key}" >&2
+  echo "version_export_needed=${version_export_needed} deploy_needed=${deploy_needed}" >&2
+}
+
+export_cache_fingerprint() {
+  resolve_build_version_refs || return 1
+  printf '%s:%s:%s' "$BUILD_REF_MODPACK" "$BUILD_REF_FQE" "$BUILD_REF_MWE" \
+    | sha256sum | awk '{print substr($1,1,8)}'
+}
+
+export_cache_key() {
+  local bundle_id="${1:?bundle_id required}"
+  local fingerprint="${2:?fingerprint required}"
+  printf '%s-%s-%s' "${EXPORT_CACHE_KEY_PREFIX:-quest-export}" "$bundle_id" "$fingerprint"
+}
+
+bundle_id_for_tag() {
+  printf 'qb-%s' "${1:?modpack tag required}"
+}
+
+_write_bundle_outputs() {
+  local tag="${1:?modpack tag required}"
+  local label="${2:-bundle}"
+  local id cache_key fingerprint
+
+  export MODPACK_TAG="$tag"
+  id="$(bundle_id_for_tag "$tag")"
+  export BUNDLE_ID="$id"
+  fingerprint="$(export_cache_fingerprint)" || exit 1
+  cache_key="$(export_cache_key "$id" "$fingerprint")"
+
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    {
+      echo "bundle_id=${id}"
+      echo "modpack_tag=${tag}"
+      echo "export_cache_key=${cache_key}"
+    } >> "$GITHUB_OUTPUT"
+  fi
+  if [[ -n "${GITHUB_ENV:-}" ]]; then
+    printf 'BUNDLE_ID=%s\n' "$id" >> "$GITHUB_ENV"
+  fi
+  echo "${label} bundle_id=${id} export_cache_key=${cache_key}"
+}
+
+prepare_check_bundle() {
+  load_config
+  local tag="${MODPACK_TAG:-}"
+
+  if [[ -z "$tag" ]]; then
+    tag="$(resolve_modpack_tag)" || exit 1
+  fi
+  _write_bundle_outputs "$tag" "check"
+}
+
+finalize_export_decision() {
+  local export_needed=false
+
+  if [[ "${VERSION_EXPORT_NEEDED:-false}" == "true" ]]; then
+    export_needed=true
+    echo "Export required: version gate" >&2
+  elif [[ "${EXPORT_CACHE_HIT:-}" != "true" ]]; then
+    export_needed=true
+    echo "Export required: cache miss (${EXPORT_CACHE_KEY:-<unset>})" >&2
+  else
+    echo "Export skipped: versions unchanged and export cache hit" >&2
+  fi
+
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "export_needed=${export_needed}" >> "$GITHUB_OUTPUT"
+  else
+    echo "export_needed=${export_needed}"
+  fi
+}
+
+record_build_versions() {
+  local site_dir="${QBM_ROOT}/${SITE_OUTPUT_DIR:-site}"
+  local build_json="${BUILD_JSON:-$site_dir/build.json}"
+  mkdir -p "$site_dir"
+  _write_build_versions_json "$build_json"
+  echo "Recorded build versions → ${build_json} (deployed with site)"
+  cat "$build_json"
+}
+
+publish_site_release() {
+  load_config
+
+  local site_dir="${QBM_ROOT}/${SITE_OUTPUT_DIR:-site}"
+  local build_json="$site_dir/build.json"
+  local asset_name="${SITE_RELEASE_ASSET_NAME:-quest-book-site.tar.gz}"
+  local archive="$QBM_ROOT/$asset_name"
+  local release_tag notes
+
+  if [[ ! -f "$build_json" ]]; then
+    echo "::error::Missing ${build_json} — run record-build-versions first" >&2
+    exit 1
+  fi
+
+  if [[ ! -f "$site_dir/index.html" ]]; then
+    echo "::error::Missing ${site_dir}/index.html — run build-site first" >&2
+    exit 1
+  fi
+
+  release_tag="$(ci_node read-release-tag.mjs "$build_json")"
+
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "::error::gh CLI required to publish site release" >&2
+    exit 1
+  fi
+
+  if [[ -z "${GH_TOKEN:-}" ]]; then
+    echo "::error::GH_TOKEN is required to publish site release" >&2
+    exit 1
+  fi
+
+  echo "::group::Package site release (${release_tag})"
+  rm -f "$archive"
+  tar -czf "$archive" -C "$site_dir" .
+  echo "Created ${archive} ($(du -h "$archive" | awk '{print $1}'))"
+  echo "::endgroup::"
+
+  if gh release view "$release_tag" --repo "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY required}" >/dev/null 2>&1; then
+    if _site_release_asset_exists "$release_tag"; then
+      echo "Release ${release_tag} already has ${asset_name} — skipping upload"
+      rm -f "$archive"
+      return 0
+    fi
+    echo "::group::Upload missing asset to release ${release_tag}"
+    gh release upload "$release_tag" "$archive" \
+      --repo "${GITHUB_REPOSITORY}" \
+      --clobber
+    rm -f "$archive"
+    echo "Uploaded ${asset_name} → existing release ${release_tag}"
+    echo "::endgroup::"
+    return 0
+  fi
+
+  notes="$(mktemp)"
+  cp "$build_json" "$notes"
+
+  echo "::group::Create GitHub Release ${release_tag}"
+  gh release create "$release_tag" "$archive" \
+    --repo "${GITHUB_REPOSITORY}" \
+    --title "Quest book site ${release_tag}" \
+    --notes-file "$notes"
+  rm -f "$notes" "$archive"
+  echo "Published ${asset_name} → release ${release_tag}"
+  echo "::endgroup::"
 }
 
 load_config() {
@@ -151,11 +618,14 @@ load_config() {
       printf 'FQE_VERSION=%s\n' "${FQE_VERSION:-}"
       printf 'MWE_REPO=%s\n' "${MWE_REPO:-jmecn/minecraft-web-export}"
       printf 'MWE_VERSION=%s\n' "${MWE_VERSION:-}"
-      printf 'SITE_VIEWER_REPO=%s\n' "${SITE_VIEWER_REPO:-jmecn/QuestBook-React}"
+      printf 'SITE_VIEWER_REPO=%s\n' "${SITE_VIEWER_REPO:-TerraFirmaGreg-Team/QuestBook-React}"
       printf 'SITE_VIEWER_VERSION=%s\n' "${SITE_VIEWER_VERSION:-}"
       printf 'OPTIMIZE_REPO=%s\n' "${OPTIMIZE_REPO:-jmecn/emi-bundle-optimize}"
       printf 'OPTIMIZE_VERSION=%s\n' "${OPTIMIZE_VERSION:-}"
       printf 'NODE_VERSION=%s\n' "${NODE_VERSION:-24}"
+      printf 'EXPORT_CACHE_KEY_PREFIX=%s\n' "${EXPORT_CACHE_KEY_PREFIX:-quest-export}"
+      printf 'SITE_RELEASE_ASSET_NAME=%s\n' "${SITE_RELEASE_ASSET_NAME:-quest-book-site.tar.gz}"
+      printf 'SITE_RELEASE_HASH_LENGTH=%s\n' "${SITE_RELEASE_HASH_LENGTH:-7}"
       printf 'EXPORT_WARMUP_TICKS=%s\n' "$EXPORT_WARMUP_TICKS"
       printf 'EXPORT_WORLD_DELAY_TICKS=%s\n' "$EXPORT_WORLD_DELAY_TICKS"
       printf 'EXPORT_TIMEOUT_SECONDS=%s\n' "$EXPORT_TIMEOUT_SECONDS"
@@ -177,11 +647,23 @@ print_versions() {
     unset MODPACK_TAG
   fi
 
-  local modpack fqe mwe hmc viewer optimize
-  modpack="${MODPACK_TAG:-$(resolve_modpack_tag)}"
-  if [[ -z "$modpack" ]]; then
-    echo "::error::Could not resolve Modpack-Modern release tag" >&2
-    exit 1
+  local modpack fqe mwe hmc viewer optimize bundle_id meta_file qbm_commit
+  meta_file="$QBM_ROOT/export-meta/bundle-id"
+  if [[ -f "$meta_file" ]]; then
+    bundle_id="$(tr -d '[:space:]' < "$meta_file")"
+    if [[ -z "$bundle_id" ]]; then
+      echo "::error::export-meta/bundle-id is empty" >&2
+      exit 1
+    fi
+    modpack="${bundle_id#qb-}"
+    echo "bundle from export-meta: ${bundle_id}"
+  else
+    modpack="${MODPACK_TAG:-$(resolve_modpack_tag)}"
+    if [[ -z "$modpack" ]]; then
+      echo "::error::Could not resolve Modpack-Modern release tag" >&2
+      exit 1
+    fi
+    bundle_id="$(bundle_id_for_tag "$modpack")"
   fi
 
   fqe="$(resolve_fqe_tag)" || exit 1
@@ -189,8 +671,10 @@ print_versions() {
   hmc="$(resolve_hmc_tag)" || exit 1
   viewer="$(resolve_site_viewer_tag)" || exit 1
   optimize="$(resolve_optimize_tag)" || exit 1
+  qbm_commit="$(resolve_quest_book_modern_commit)" || exit 1
 
   export MODPACK_TAG="$modpack"
+  export BUNDLE_ID="$bundle_id"
   export FQE_TAG="$fqe"
   export MWE_TAG="$mwe"
   export HMC_TAG="$hmc"
@@ -210,16 +694,27 @@ print_versions() {
       printf 'HMC_VERSION=%s\n' "$hmc"
       printf 'SITE_VIEWER_VERSION=%s\n' "$viewer"
       printf 'OPTIMIZE_VERSION=%s\n' "$optimize"
+      printf 'BUNDLE_ID=%s\n' "$bundle_id"
+      printf 'QUEST_BOOK_MODERN_COMMIT=%s\n' "$qbm_commit"
     } >> "$GITHUB_ENV"
+  fi
+
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    {
+      printf 'modpack_tag=%s\n' "$modpack"
+      printf 'bundle_id=%s\n' "$bundle_id"
+    } >> "$GITHUB_OUTPUT"
   fi
 
   echo "::group::CI resolved versions"
   printf '%s\n' \
     "modpack_tag=${modpack}" \
+    "bundle_id=${bundle_id}" \
     "ftb-quest-export=${fqe}" \
     "minecraft-web-export=${mwe}" \
     "questbook-react=${viewer}" \
     "emi-bundle-optimize=${optimize}" \
+    "quest-book-modern=${qbm_commit}" \
     "minecraft=${MC_VERSION} (assets ${MC_ASSET_INDEX})" \
     "forge_build=${FORGE_BUILD}" \
     "headlessmc=${hmc}"
@@ -232,10 +727,12 @@ print_versions() {
       echo "| Component | Version |"
       echo "|-----------|---------|"
       echo "| Modpack-Modern | \`${modpack}\` |"
+      echo "| Bundle id | \`${bundle_id}\` |"
       echo "| ftb-quest-export | \`${fqe}\` |"
       echo "| minecraft-web-export | \`${mwe}\` |"
       echo "| QuestBook-React | \`${viewer}\` |"
       echo "| emi-bundle-optimize | \`${optimize}\` |"
+      echo "| QuestBook-Modern | \`${qbm_commit}\` |"
       echo "| Minecraft / Forge | \`${MC_VERSION}\` / \`${FORGE_BUILD}\` |"
       echo "| HeadlessMC | \`${hmc}\` |"
     } >> "$GITHUB_STEP_SUMMARY"
@@ -293,16 +790,7 @@ prepare_export() {
 }
 
 prepare_bundle_id() {
-  local tag="${MODPACK_TAG:?MODPACK_TAG required}"
-  local id="qb-${tag}"
-
-  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-    {
-      echo "bundle_id=${id}"
-      echo "modpack_tag=${tag}"
-    } >> "$GITHUB_OUTPUT"
-  fi
-  echo "bundle_id=${id} (modpack @ ${tag})"
+  _write_bundle_outputs "${MODPACK_TAG:?MODPACK_TAG required}" "export"
 }
 
 export_languages() {
@@ -455,16 +943,32 @@ verify_quest_export() {
     exit 1
   fi
 
-  for icon_file in icons.css index.json; do
-    if [[ ! -f "$quest/assets/icons/$icon_file" ]]; then
-      echo "::error::Missing $quest/assets/icons/$icon_file"
+  if [[ -f "$quest/assets/icons/items/manifest.json" ]]; then
+    local item_png_count manifest_count
+    item_png_count="$(find "$quest/assets/icons/items" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
+    manifest_count="$(python3 -c "import json; print(json.load(open('$quest/assets/icons/items/manifest.json')).get('count', 0))")"
+    if [[ "$item_png_count" -lt 1 ]]; then
+      echo "::error::Missing per-item PNGs under $quest/assets/icons/items"
       exit 1
     fi
-  done
+    if [[ "$manifest_count" -lt 1 ]]; then
+      echo "::error::icons/items/manifest.json has no items"
+      exit 1
+    fi
+    echo "quest icons: per-item PNG layout ($item_png_count files, manifest count=$manifest_count)"
+  else
+    for icon_file in icons.css index.json; do
+      if [[ ! -f "$quest/assets/icons/$icon_file" ]]; then
+        echo "::error::Missing $quest/assets/icons/$icon_file"
+        exit 1
+      fi
+    done
 
-  if ! grep -qF -- '--atlas-w:' "$quest/assets/icons/icons.css"; then
-    echo "::error::icons.css missing sprite CSS variables (--atlas-w)"
-    exit 1
+    if ! grep -qF -- '--atlas-w:' "$quest/assets/icons/icons.css"; then
+      echo "::error::icons.css missing sprite CSS variables (--atlas-w)"
+      exit 1
+    fi
+    echo "quest icons: legacy atlas layout"
   fi
 
   echo "quest-export OK: $quest"
@@ -533,28 +1037,44 @@ install_bundle() {
 }
 
 resolve_bundle_id() {
-  local id
+  local id tag
 
   if [[ -n "${BUNDLE_ID_INPUT:-}" ]]; then
     id="$BUNDLE_ID_INPUT"
   elif [[ -f "$QBM_ROOT/export-meta/bundle-id" ]]; then
     id="$(tr -d '\r\n' < "$QBM_ROOT/export-meta/bundle-id")"
   elif [[ -n "${MODPACK_TAG:-}" ]]; then
-    id="qb-${MODPACK_TAG}"
+    id="$(bundle_id_for_tag "$MODPACK_TAG")"
   else
     load_config
-    MODPACK_TAG="$(resolve_modpack_tag)"
-    if [[ -z "$MODPACK_TAG" ]]; then
+    if [[ -z "${MODPACK_TAG:-}" ]]; then
+      unset MODPACK_TAG
+    fi
+    tag="$(resolve_modpack_tag)"
+    if [[ -z "$tag" ]]; then
       echo "::error::Could not resolve modpack tag for bundle id" >&2
       exit 1
     fi
-    id="qb-${MODPACK_TAG}"
+    id="$(bundle_id_for_tag "$tag")"
+    export MODPACK_TAG="$tag"
   fi
 
+  export BUNDLE_ID="$id"
+
+  local fingerprint cache_key
+  fingerprint="$(export_cache_fingerprint)" || exit 1
+  cache_key="$(export_cache_key "$id" "$fingerprint")"
+
   if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-    echo "bundle_id=${id}" >> "$GITHUB_OUTPUT"
+    {
+      echo "bundle_id=${id}"
+      echo "export_cache_key=${cache_key}"
+    } >> "$GITHUB_OUTPUT"
   fi
-  echo "bundle_id=${id}"
+  if [[ -n "${GITHUB_ENV:-}" ]]; then
+    printf 'BUNDLE_ID=%s\n' "$id" >> "$GITHUB_ENV"
+  fi
+  echo "deploy bundle_id=${id} export_cache_key=${cache_key}"
 }
 
 extract_bundle() {
@@ -621,7 +1141,7 @@ fetch_bundle() {
 }
 
 fetch_quest_site_release() {
-  local repo="${SITE_VIEWER_REPO:-jmecn/QuestBook-React}"
+  local repo="${SITE_VIEWER_REPO:-TerraFirmaGreg-Team/QuestBook-React}"
   local site_dir="${SITE_OUTPUT_DIR:?SITE_OUTPUT_DIR required}"
   local version tag
 
@@ -707,6 +1227,10 @@ optimize_quest_export_icons() {
     echo "::error::Missing $icons_dir — quest-export has no icon atlas" >&2
     return 1
   fi
+  if [[ -f "$icons_dir/items/manifest.json" ]]; then
+    echo "Per-item quest icons — skip atlas WebP optimize"
+    return 0
+  fi
   if [[ ! -f "$assets_dir/bundle.json" ]]; then
     echo "::warning::Missing $assets_dir/bundle.json — skip icon WebP optimize (needs newer ftb-quest-export)"
     return 0
@@ -779,18 +1303,17 @@ usage() {
 Usage: bash ci/run.sh <command>
 
 Workflow composites:
-  prepare-export      env + modpack checkout + bundle id + resolve FQE/MWE/HMC tags
-  prepare-game        xvfb deps + export mod jars + HeadlessMC
-  finalize-export     export-meta + tar (needs BUNDLE_ID, MODPACK_TAG)
-  prepare-deploy      env + resolve bundle id
-  install-bundle      extract or fetch (ACQUIRE=extract|fetch, BUNDLE_ID)
-  build-site            fetch React site + stage quest-export
+  check-gates, prepare-check-bundle, finalize-export-decision,
+  prepare-export, prepare-game, finalize-export,
+  prepare-deploy, extract-bundle, build-site,
+  record-build-versions, publish-site-release
 
 Granular (local debugging):
   env, print-versions, checkout-modpack, prepare-bundle-id, export-languages,
   install-mods, setup-hmc, launch-export, write-export-meta,
   resolve-bundle-id, extract-bundle, fetch-bundle,
-  fetch-quest-site, optimize-quest-icons, assemble-deploy-site
+  fetch-quest-site, optimize-quest-icons, assemble-deploy-site,
+  check-build-changes, probe-site-release, finalize-deploy-decision
 EOF
 }
 
@@ -805,6 +1328,14 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   case "$cmd" in
     env) load_config "$@" ;;
     print-versions) print_versions "$@" ;;
+    check-gates) check_gates "$@" ;;
+    prepare-check-bundle) prepare_check_bundle "$@" ;;
+    check-build-changes) check_build_changes "$@" ;;
+    finalize-export-decision) finalize_export_decision "$@" ;;
+    probe-site-release) probe_site_release "$@" ;;
+    finalize-deploy-decision) finalize_deploy_decision "$@" ;;
+    record-build-versions) record_build_versions "$@" ;;
+    publish-site-release) publish_site_release "$@" ;;
     prepare-export) prepare_export "$@" ;;
     prepare-game) prepare_game "$@" ;;
     finalize-export) finalize_export "$@" ;;

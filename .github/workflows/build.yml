@@ -1,0 +1,275 @@
+name: Build quest book
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  push:
+    branches: ["master"]
+    paths:
+      - "ci/**"
+      - "language.json"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+    inputs:
+      modpack_tag:
+        description: Modpack-Modern release tag
+        required: false
+        default: ""
+      fqe_version:
+        description: ftb-quest-export release tag
+        required: false
+        default: ""
+      mwe_version:
+        description: minecraft-web-export release tag
+        required: false
+        default: ""
+      bundle_id:
+        description: Export bundle id (deploy only)
+        required: false
+        default: ""
+      export_warmup_ticks:
+        description: Ticks after quest load before export
+        required: false
+        default: ""
+      force_export:
+        description: Re-export quest bundle even if modpack/FQE/MWE unchanged
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: quest-book-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      export_needed: ${{ steps.decision.outputs.export_needed }}
+      deploy_needed: ${{ steps.gates.outputs.deploy_needed }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Check gates
+        id: gates
+        env:
+          MODPACK_TAG: ${{ github.event.inputs.modpack_tag }}
+          FQE_TAG: ${{ github.event.inputs.fqe_version }}
+          MWE_TAG: ${{ github.event.inputs.mwe_version }}
+          FORCE_EXPORT: ${{ github.event.inputs.force_export }}
+        run: bash ci/run.sh check-gates
+
+      - name: Probe export cache
+        id: export_cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            export-meta/
+            quest-export-${{ steps.gates.outputs.bundle_id }}.tar.gz
+          key: ${{ steps.gates.outputs.export_cache_key }}
+          lookup-only: true
+
+      - name: Finalize export decision
+        id: decision
+        env:
+          VERSION_EXPORT_NEEDED: ${{ steps.gates.outputs.version_export_needed }}
+          EXPORT_CACHE_HIT: ${{ steps.export_cache.outputs.cache-hit }}
+          EXPORT_CACHE_KEY: ${{ steps.gates.outputs.export_cache_key }}
+        run: bash ci/run.sh finalize-export-decision
+
+  export:
+    needs: check
+    if: needs.check.outputs.export_needed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    outputs:
+      export_cache_key: ${{ steps.metadata.outputs.export_cache_key }}
+      bundle_id: ${{ steps.metadata.outputs.bundle_id }}
+    permissions:
+      contents: read
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Prepare export
+        id: metadata
+        env:
+          MODPACK_TAG: ${{ github.event.inputs.modpack_tag }}
+          FQE_TAG: ${{ github.event.inputs.fqe_version }}
+          MWE_TAG: ${{ github.event.inputs.mwe_version }}
+        run: bash ci/run.sh prepare-export
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - name: Export languages
+        id: export_languages
+        run: bash ci/run.sh export-languages
+
+      - name: Fetch mods
+        working-directory: ${{ env.MODPACK_DIR }}
+        run: java -jar pakku.jar fetch
+
+      - name: Restore HMC cache
+        id: hmc-restore
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.RUNNER_HOME }}/.minecraft
+          key: hmc-${{ env.MC_VERSION }}-forge-${{ env.FORGE_BUILD }}
+          restore-keys: |
+            hmc-${{ env.MC_VERSION }}-forge-
+            hmc-${{ env.MC_VERSION }}-
+
+      - name: Restore world cache
+        id: world-restore
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.MODPACK_DIR }}/saves/quest-export
+          key: quest-export-${{ env.MC_VERSION }}-${{ hashFiles(format('{0}/pakku-lock.json', env.MODPACK_DIR)) }}
+          restore-keys: quest-export-${{ env.MC_VERSION }}-
+
+      - name: Prepare game
+        run: bash ci/run.sh prepare-game
+
+      - name: Run export
+        env:
+          ALSOFT_DRIVERS: "null"
+          EXPORT_WARMUP: ${{ github.event.inputs.export_warmup_ticks || env.EXPORT_WARMUP_TICKS }}
+          FQE_JVM_FLAGS: >-
+            -Xmx12G
+            -Xms4G
+            -XX:+UseG1GC
+            -Djava.awt.headless=false
+            -Dmodernfix.config.mixin.feature.integrated_server_watchdog=false
+            -Dquest.export.runAndExit=true
+            -Dquest.export.outputDir=${{ env.EXPORT_ROOT }}
+            -Dquest.exportWorldName=quest-export
+            -Dquest.exportWarmupTicks=${{ env.EXPORT_WARMUP }}
+            -Dquest.exportWorldDelayTicks=${{ env.EXPORT_WORLD_DELAY_TICKS }}
+            -Dquest.exportTimeoutSeconds=${{ env.EXPORT_TIMEOUT_SECONDS }}
+            -Dquest.exportLanguages=${{ steps.export_languages.outputs.export_languages }}
+        run: bash ci/run.sh launch-export
+
+      - name: Save world cache
+        if: success() && steps.world-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.MODPACK_DIR }}/saves/quest-export
+          key: ${{ steps.world-restore.outputs.cache-primary-key }}
+
+      - name: Save HMC cache
+        if: success() && steps.hmc-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.RUNNER_HOME }}/.minecraft
+          key: ${{ steps.hmc-restore.outputs.cache-primary-key }}
+
+      - name: Package export
+        env:
+          BUNDLE_ID: ${{ steps.metadata.outputs.bundle_id }}
+          MODPACK_TAG: ${{ steps.metadata.outputs.modpack_tag }}
+        run: bash ci/run.sh finalize-export
+
+      - name: Save export cache
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            export-meta/
+            quest-export-${{ steps.metadata.outputs.bundle_id }}.tar.gz
+          key: ${{ steps.metadata.outputs.export_cache_key }}
+
+  deploy:
+    needs: [check, export]
+    if: >-
+      always() &&
+      needs.export.result != 'failure' &&
+      needs.export.result != 'cancelled' &&
+      (
+        github.event_name == 'push' ||
+        needs.check.outputs.deploy_needed == 'true'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+      actions: read
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Load config
+        run: bash ci/run.sh env
+
+      - name: Resolve bundle
+        id: metadata
+        env:
+          BUNDLE_ID_INPUT: ${{ github.event.inputs.bundle_id }}
+          MODPACK_TAG: ${{ github.event.inputs.modpack_tag }}
+        run: bash ci/run.sh prepare-deploy
+
+      - name: Restore export cache
+        id: export_cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            export-meta/
+            quest-export-${{ steps.metadata.outputs.bundle_id }}.tar.gz
+          key: ${{ needs.export.outputs.export_cache_key || steps.metadata.outputs.export_cache_key }}
+          fail-on-cache-miss: true
+
+      - name: Resolve versions
+        run: bash ci/run.sh print-versions
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Extract export bundle
+        run: bash ci/run.sh extract-bundle
+
+      - name: Build site
+        run: bash ci/run.sh build-site
+
+      - name: Record build versions
+        run: bash ci/run.sh record-build-versions
+
+      - name: Publish site release
+        run: bash ci/run.sh publish-site-release
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ${{ env.SITE_OUTPUT_DIR }}
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

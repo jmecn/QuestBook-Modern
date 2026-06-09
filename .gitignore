@@ -3,6 +3,8 @@ Modpack-Modern/
 export/
 export-meta/
 quest-export-*.tar.gz
+quest-book-site.tar.gz
+build.json
 headlessmc-launcher-*.jar
 ftb-quest-export-*.jar
 minecraft-web-export-*.jar
