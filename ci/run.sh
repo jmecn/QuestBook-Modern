@@ -934,10 +934,6 @@ verify_quest_export() {
     fi
   done
 
-  if [[ ! -d "$quest/data" ]]; then
-    echo "::warning::Missing optional $quest/data (texture-only closure)"
-  fi
-
   if [[ ! -d "$quest/assets/icons" ]]; then
     echo "::error::Missing $quest/assets/icons — install minecraft-web-export and re-export"
     exit 1
@@ -972,7 +968,7 @@ verify_quest_export() {
   fi
 
   echo "quest-export OK: $quest"
-  du -sh "$quest" "$quest/assets" "$quest/data" "$quest/lang" "$quest/quests" "$quest/assets/icons" 2>/dev/null || true
+  du -sh "$quest" "$quest/assets" "$quest/lang" "$quest/quests" "$quest/assets/icons" 2>/dev/null || true
 }
 
 launch_export() {
