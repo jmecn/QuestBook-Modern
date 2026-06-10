@@ -19,10 +19,6 @@ on:
         description: ftb-quest-export release tag
         required: false
         default: ""
-      mwe_version:
-        description: minecraft-web-export release tag
-        required: false
-        default: ""
       bundle_id:
         description: Export bundle id (deploy only)
         required: false
@@ -32,7 +28,7 @@ on:
         required: false
         default: ""
       force_export:
-        description: Re-export quest bundle even if modpack/FQE/MWE unchanged
+        description: Re-export quest bundle even if modpack/FQE unchanged
         required: false
         type: boolean
         default: false
@@ -65,7 +61,6 @@ jobs:
         env:
           MODPACK_TAG: ${{ github.event.inputs.modpack_tag }}
           FQE_TAG: ${{ github.event.inputs.fqe_version }}
-          MWE_TAG: ${{ github.event.inputs.mwe_version }}
           FORCE_EXPORT: ${{ github.event.inputs.force_export }}
         run: bash ci/run.sh check-gates
 
@@ -110,7 +105,6 @@ jobs:
         env:
           MODPACK_TAG: ${{ github.event.inputs.modpack_tag }}
           FQE_TAG: ${{ github.event.inputs.fqe_version }}
-          MWE_TAG: ${{ github.event.inputs.mwe_version }}
         run: bash ci/run.sh prepare-export
 
       - name: Setup Java

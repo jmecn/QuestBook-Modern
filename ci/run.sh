@@ -98,12 +98,6 @@ resolve_fqe_tag() {
     "${FQE_TAG:-${FQE_VERSION:-}}"
 }
 
-resolve_mwe_tag() {
-  resolve_github_release_ref \
-    "${MWE_REPO:-jmecn/minecraft-web-export}" \
-    "${MWE_TAG:-${MWE_VERSION:-}}"
-}
-
 resolve_hmc_tag() {
   resolve_github_release_ref \
     "${HMC_REPO:-3arthqu4ke/headlessmc}" \
@@ -140,12 +134,6 @@ resolve_fqe_version() {
     "${FQE_TAG:-${FQE_VERSION:-}}"
 }
 
-resolve_mwe_version() {
-  resolve_github_release_version \
-    "${MWE_REPO:-jmecn/minecraft-web-export}" \
-    "${MWE_TAG:-${MWE_VERSION:-}}"
-}
-
 resolve_hmc_version() {
   resolve_github_release_version \
     "${HMC_REPO:-3arthqu4ke/headlessmc}" \
@@ -174,7 +162,6 @@ resolve_build_version_refs() {
 
   BUILD_REF_MODPACK="$(_normalize_version_ref "$(resolve_modpack_tag)")" || return 1
   BUILD_REF_FQE="$(_normalize_version_ref "$(resolve_fqe_version)")" || return 1
-  BUILD_REF_MWE="$(_normalize_version_ref "$(resolve_mwe_version)")" || return 1
   BUILD_REF_SITE="$(_normalize_version_ref "$(resolve_site_viewer_version)")" || return 1
   BUILD_REF_OPTIMIZE="$(_normalize_version_ref "$(resolve_optimize_version)")" || return 1
   BUILD_REF_HMC="$(_normalize_version_ref "$(resolve_hmc_version)")" || return 1
@@ -223,7 +210,6 @@ _write_build_versions_json() {
   ci_node write-build-versions.mjs \
     "$BUILD_REF_MODPACK" \
     "$BUILD_REF_FQE" \
-    "$BUILD_REF_MWE" \
     "$BUILD_REF_SITE" \
     "$BUILD_REF_OPTIMIZE" \
     "$BUILD_REF_HMC" \
@@ -250,7 +236,6 @@ _run_check_build_mjs() {
       "${SITE_RELEASE_HASH_LENGTH:-7}" \
       "$BUILD_REF_MODPACK" \
       "$BUILD_REF_FQE" \
-      "$BUILD_REF_MWE" \
       "$BUILD_REF_SITE" \
       "$BUILD_REF_OPTIMIZE" \
       "$BUILD_REF_HMC" \
@@ -270,7 +255,6 @@ check_build_changes() {
     "${SITE_RELEASE_HASH_LENGTH:-7}" \
     "$BUILD_REF_MODPACK" \
     "$BUILD_REF_FQE" \
-    "$BUILD_REF_MWE" \
     "$BUILD_REF_SITE" \
     "$BUILD_REF_OPTIMIZE" \
     "$BUILD_REF_HMC" \
@@ -434,7 +418,7 @@ check_gates() {
 
 export_cache_fingerprint() {
   resolve_build_version_refs || return 1
-  printf '%s:%s:%s' "$BUILD_REF_MODPACK" "$BUILD_REF_FQE" "$BUILD_REF_MWE" \
+  printf '%s:%s' "$BUILD_REF_MODPACK" "$BUILD_REF_FQE" \
     | sha256sum | awk '{print substr($1,1,8)}'
 }
 
@@ -597,7 +581,7 @@ load_config() {
   export RUNNER_HOME JAVA_VERSION
   export MC_VERSION MC_ASSET_INDEX FORGE_BUILD
   export HMC_REPO HMC_VERSION MODPACK_DIR MODPACK_REPO
-  export FQE_REPO FQE_VERSION MWE_REPO MWE_VERSION
+  export FQE_REPO FQE_VERSION
   export SITE_VIEWER_REPO SITE_VIEWER_VERSION OPTIMIZE_REPO OPTIMIZE_VERSION NODE_VERSION
   export EXPORT_WARMUP_TICKS EXPORT_WORLD_DELAY_TICKS EXPORT_TIMEOUT_SECONDS
   export EXPORT_ROOT EXPORT_QUEST EXPORT_ROOT_DIR QUEST_SUBDIR SITE_OUTPUT_DIR RECIPE_BOOK_BASE_URL
@@ -616,8 +600,6 @@ load_config() {
       printf 'MODPACK_REPO=%s\n' "$MODPACK_REPO"
       printf 'FQE_REPO=%s\n' "${FQE_REPO:-jmecn/ftb-quest-export}"
       printf 'FQE_VERSION=%s\n' "${FQE_VERSION:-}"
-      printf 'MWE_REPO=%s\n' "${MWE_REPO:-jmecn/minecraft-web-export}"
-      printf 'MWE_VERSION=%s\n' "${MWE_VERSION:-}"
       printf 'SITE_VIEWER_REPO=%s\n' "${SITE_VIEWER_REPO:-jmecn/QuestBook-React}"
       printf 'SITE_VIEWER_VERSION=%s\n' "${SITE_VIEWER_VERSION:-}"
       printf 'OPTIMIZE_REPO=%s\n' "${OPTIMIZE_REPO:-jmecn/emi-bundle-optimize}"
@@ -647,7 +629,7 @@ print_versions() {
     unset MODPACK_TAG
   fi
 
-  local modpack fqe mwe hmc viewer optimize bundle_id meta_file qbm_commit
+  local modpack fqe hmc viewer optimize bundle_id meta_file qbm_commit
   meta_file="$QBM_ROOT/export-meta/bundle-id"
   if [[ -f "$meta_file" ]]; then
     bundle_id="$(tr -d '[:space:]' < "$meta_file")"
@@ -667,7 +649,6 @@ print_versions() {
   fi
 
   fqe="$(resolve_fqe_tag)" || exit 1
-  mwe="$(resolve_mwe_tag)" || exit 1
   hmc="$(resolve_hmc_tag)" || exit 1
   viewer="$(resolve_site_viewer_tag)" || exit 1
   optimize="$(resolve_optimize_tag)" || exit 1
@@ -676,7 +657,6 @@ print_versions() {
   export MODPACK_TAG="$modpack"
   export BUNDLE_ID="$bundle_id"
   export FQE_TAG="$fqe"
-  export MWE_TAG="$mwe"
   export HMC_TAG="$hmc"
   export SITE_VIEWER_TAG="$viewer"
   export OPTIMIZE_TAG="$optimize"
@@ -685,12 +665,10 @@ print_versions() {
     {
       printf 'MODPACK_TAG=%s\n' "$modpack"
       printf 'FQE_TAG=%s\n' "$fqe"
-      printf 'MWE_TAG=%s\n' "$mwe"
       printf 'HMC_TAG=%s\n' "$hmc"
       printf 'SITE_VIEWER_TAG=%s\n' "$viewer"
       printf 'OPTIMIZE_TAG=%s\n' "$optimize"
       printf 'FQE_VERSION=%s\n' "$fqe"
-      printf 'MWE_VERSION=%s\n' "$mwe"
       printf 'HMC_VERSION=%s\n' "$hmc"
       printf 'SITE_VIEWER_VERSION=%s\n' "$viewer"
       printf 'OPTIMIZE_VERSION=%s\n' "$optimize"
@@ -711,7 +689,6 @@ print_versions() {
     "modpack_tag=${modpack}" \
     "bundle_id=${bundle_id}" \
     "ftb-quest-export=${fqe}" \
-    "minecraft-web-export=${mwe}" \
     "questbook-react=${viewer}" \
     "emi-bundle-optimize=${optimize}" \
     "quest-book-modern=${qbm_commit}" \
@@ -729,7 +706,6 @@ print_versions() {
       echo "| Modpack-Modern | \`${modpack}\` |"
       echo "| Bundle id | \`${bundle_id}\` |"
       echo "| ftb-quest-export | \`${fqe}\` |"
-      echo "| minecraft-web-export | \`${mwe}\` |"
       echo "| QuestBook-React | \`${viewer}\` |"
       echo "| emi-bundle-optimize | \`${optimize}\` |"
       echo "| QuestBook-Modern | \`${qbm_commit}\` |"
@@ -848,14 +824,12 @@ install_gh_release_jar() {
 }
 
 install_export_mods() {
-  local fqe_tag mwe_tag
+  local fqe_tag
   fqe_tag="$(resolve_fqe_tag)" || exit 1
-  mwe_tag="$(resolve_mwe_tag)" || exit 1
-  echo "Installing ftb-quest-export ${fqe_tag}, minecraft-web-export ${mwe_tag}"
+  echo "Installing ftb-quest-export ${fqe_tag}"
 
   install_gh_release_jar "${FQE_REPO:-jmecn/ftb-quest-export}" "$fqe_tag" ftb-quest-export \
-    'ftb-quest-forge*.jar' 'ftbquest*.jar'
-  install_gh_release_jar "${MWE_REPO:-jmecn/minecraft-web-export}" "$mwe_tag" minecraft-web-export
+    'ftb-quest-forge*.jar' 'ftbquest*.jar' 'minecraft-web-export*.jar'
 }
 
 install_display_deps() {
@@ -935,13 +909,15 @@ verify_quest_export() {
   done
 
   if [[ ! -d "$quest/assets/icons" ]]; then
-    echo "::error::Missing $quest/assets/icons — install minecraft-web-export and re-export"
+    echo "::error::Missing $quest/assets/icons — re-export with ftb-quest-export"
     exit 1
   fi
 
+  local item_png_count
+  item_png_count="$(find "$quest/assets/icons/items" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
+
   if [[ -f "$quest/assets/icons/items/manifest.json" ]]; then
-    local item_png_count manifest_count
-    item_png_count="$(find "$quest/assets/icons/items" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
+    local manifest_count
     manifest_count="$(python3 -c "import json; print(json.load(open('$quest/assets/icons/items/manifest.json')).get('count', 0))")"
     if [[ "$item_png_count" -lt 1 ]]; then
       echo "::error::Missing per-item PNGs under $quest/assets/icons/items"
@@ -952,6 +928,8 @@ verify_quest_export() {
       exit 1
     fi
     echo "quest icons: per-item PNG layout ($item_png_count files, manifest count=$manifest_count)"
+  elif [[ "$item_png_count" -ge 1 ]]; then
+    echo "quest icons: per-item PNG layout ($item_png_count files)"
   else
     for icon_file in icons.css index.json; do
       if [[ ! -f "$quest/assets/icons/$icon_file" ]]; then

@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 export const VERSION_KEYS = [
   'modpack',
   'ftb-quest-export',
-  'minecraft-web-export',
   'questbook-react',
   'emi-bundle-optimize',
   'headlessmc',
@@ -13,7 +12,6 @@ export const VERSION_KEYS = [
 export const EXPORT_VERSION_KEYS = [
   'modpack',
   'ftb-quest-export',
-  'minecraft-web-export',
 ];
 
 export function versionsFromArgv(argv, startIndex = 0) {
