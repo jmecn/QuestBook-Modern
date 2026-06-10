@@ -4,7 +4,6 @@ export const VERSION_KEYS = [
   'modpack',
   'ftb-quest-export',
   'questbook-react',
-  'emi-bundle-optimize',
   'headlessmc',
   'quest-book-modern',
 ];

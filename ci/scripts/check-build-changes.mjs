@@ -9,9 +9,9 @@ import {
 } from '../lib/build-json.mjs';
 
 const args = process.argv.slice(2);
-if (args.length < 9) {
+if (args.length < 8) {
   console.error(
-    'usage: check-build-changes.mjs <recordedPath> <bundleId> <hashLen> <versions...6>',
+    'usage: check-build-changes.mjs <recordedPath> <bundleId> <hashLen> <versions...5>',
   );
   process.exit(1);
 }

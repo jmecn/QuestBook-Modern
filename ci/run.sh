@@ -116,18 +116,6 @@ resolve_site_viewer_version() {
     "${SITE_VIEWER_TAG:-${SITE_VIEWER_VERSION:-}}"
 }
 
-resolve_optimize_tag() {
-  resolve_github_release_ref \
-    "${OPTIMIZE_REPO:-jmecn/emi-bundle-optimize}" \
-    "${OPTIMIZE_TAG:-${OPTIMIZE_VERSION:-}}"
-}
-
-resolve_optimize_version() {
-  resolve_github_release_version \
-    "${OPTIMIZE_REPO:-jmecn/emi-bundle-optimize}" \
-    "${OPTIMIZE_TAG:-${OPTIMIZE_VERSION:-}}"
-}
-
 resolve_fqe_version() {
   resolve_github_release_version \
     "${FQE_REPO:-jmecn/ftb-quest-export}" \
@@ -163,7 +151,6 @@ resolve_build_version_refs() {
   BUILD_REF_MODPACK="$(_normalize_version_ref "$(resolve_modpack_tag)")" || return 1
   BUILD_REF_FQE="$(_normalize_version_ref "$(resolve_fqe_version)")" || return 1
   BUILD_REF_SITE="$(_normalize_version_ref "$(resolve_site_viewer_version)")" || return 1
-  BUILD_REF_OPTIMIZE="$(_normalize_version_ref "$(resolve_optimize_version)")" || return 1
   BUILD_REF_HMC="$(_normalize_version_ref "$(resolve_hmc_version)")" || return 1
   BUILD_REF_QBM="$(_normalize_version_ref "$(resolve_quest_book_modern_commit)")" || return 1
 }
@@ -211,7 +198,6 @@ _write_build_versions_json() {
     "$BUILD_REF_MODPACK" \
     "$BUILD_REF_FQE" \
     "$BUILD_REF_SITE" \
-    "$BUILD_REF_OPTIMIZE" \
     "$BUILD_REF_HMC" \
     "$BUILD_REF_QBM" \
     "$bundle_id" \
@@ -237,7 +223,6 @@ _run_check_build_mjs() {
       "$BUILD_REF_MODPACK" \
       "$BUILD_REF_FQE" \
       "$BUILD_REF_SITE" \
-      "$BUILD_REF_OPTIMIZE" \
       "$BUILD_REF_HMC" \
       "$BUILD_REF_QBM"
   )
@@ -256,7 +241,6 @@ check_build_changes() {
     "$BUILD_REF_MODPACK" \
     "$BUILD_REF_FQE" \
     "$BUILD_REF_SITE" \
-    "$BUILD_REF_OPTIMIZE" \
     "$BUILD_REF_HMC" \
     "$BUILD_REF_QBM"
   rm -f "$build_json"
@@ -582,7 +566,7 @@ load_config() {
   export MC_VERSION MC_ASSET_INDEX FORGE_BUILD
   export HMC_REPO HMC_VERSION MODPACK_DIR MODPACK_REPO
   export FQE_REPO FQE_VERSION
-  export SITE_VIEWER_REPO SITE_VIEWER_VERSION OPTIMIZE_REPO OPTIMIZE_VERSION NODE_VERSION
+  export SITE_VIEWER_REPO SITE_VIEWER_VERSION NODE_VERSION
   export EXPORT_WARMUP_TICKS EXPORT_WORLD_DELAY_TICKS EXPORT_TIMEOUT_SECONDS
   export EXPORT_ROOT EXPORT_QUEST EXPORT_ROOT_DIR QUEST_SUBDIR SITE_OUTPUT_DIR RECIPE_BOOK_BASE_URL
   export EXPORT_ARTIFACT_NAME="${EXPORT_ARTIFACT_NAME:-quest-book}"
@@ -602,8 +586,6 @@ load_config() {
       printf 'FQE_VERSION=%s\n' "${FQE_VERSION:-}"
       printf 'SITE_VIEWER_REPO=%s\n' "${SITE_VIEWER_REPO:-jmecn/QuestBook-React}"
       printf 'SITE_VIEWER_VERSION=%s\n' "${SITE_VIEWER_VERSION:-}"
-      printf 'OPTIMIZE_REPO=%s\n' "${OPTIMIZE_REPO:-jmecn/emi-bundle-optimize}"
-      printf 'OPTIMIZE_VERSION=%s\n' "${OPTIMIZE_VERSION:-}"
       printf 'NODE_VERSION=%s\n' "${NODE_VERSION:-24}"
       printf 'EXPORT_CACHE_KEY_PREFIX=%s\n' "${EXPORT_CACHE_KEY_PREFIX:-quest-export}"
       printf 'SITE_RELEASE_ASSET_NAME=%s\n' "${SITE_RELEASE_ASSET_NAME:-quest-book-site.tar.gz}"
@@ -629,7 +611,7 @@ print_versions() {
     unset MODPACK_TAG
   fi
 
-  local modpack fqe hmc viewer optimize bundle_id meta_file qbm_commit
+  local modpack fqe hmc viewer bundle_id meta_file qbm_commit
   meta_file="$QBM_ROOT/export-meta/bundle-id"
   if [[ -f "$meta_file" ]]; then
     bundle_id="$(tr -d '[:space:]' < "$meta_file")"
@@ -651,7 +633,6 @@ print_versions() {
   fqe="$(resolve_fqe_tag)" || exit 1
   hmc="$(resolve_hmc_tag)" || exit 1
   viewer="$(resolve_site_viewer_tag)" || exit 1
-  optimize="$(resolve_optimize_tag)" || exit 1
   qbm_commit="$(resolve_quest_book_modern_commit)" || exit 1
 
   export MODPACK_TAG="$modpack"
@@ -659,7 +640,6 @@ print_versions() {
   export FQE_TAG="$fqe"
   export HMC_TAG="$hmc"
   export SITE_VIEWER_TAG="$viewer"
-  export OPTIMIZE_TAG="$optimize"
 
   if [[ -n "${GITHUB_ENV:-}" ]]; then
     {
@@ -667,11 +647,9 @@ print_versions() {
       printf 'FQE_TAG=%s\n' "$fqe"
       printf 'HMC_TAG=%s\n' "$hmc"
       printf 'SITE_VIEWER_TAG=%s\n' "$viewer"
-      printf 'OPTIMIZE_TAG=%s\n' "$optimize"
       printf 'FQE_VERSION=%s\n' "$fqe"
       printf 'HMC_VERSION=%s\n' "$hmc"
       printf 'SITE_VIEWER_VERSION=%s\n' "$viewer"
-      printf 'OPTIMIZE_VERSION=%s\n' "$optimize"
       printf 'BUNDLE_ID=%s\n' "$bundle_id"
       printf 'QUEST_BOOK_MODERN_COMMIT=%s\n' "$qbm_commit"
     } >> "$GITHUB_ENV"
@@ -690,7 +668,6 @@ print_versions() {
     "bundle_id=${bundle_id}" \
     "ftb-quest-export=${fqe}" \
     "questbook-react=${viewer}" \
-    "emi-bundle-optimize=${optimize}" \
     "quest-book-modern=${qbm_commit}" \
     "minecraft=${MC_VERSION} (assets ${MC_ASSET_INDEX})" \
     "forge_build=${FORGE_BUILD}" \
@@ -707,7 +684,6 @@ print_versions() {
       echo "| Bundle id | \`${bundle_id}\` |"
       echo "| ftb-quest-export | \`${fqe}\` |"
       echo "| QuestBook-React | \`${viewer}\` |"
-      echo "| emi-bundle-optimize | \`${optimize}\` |"
       echo "| QuestBook-Modern | \`${qbm_commit}\` |"
       echo "| Minecraft / Forge | \`${MC_VERSION}\` / \`${FORGE_BUILD}\` |"
       echo "| HeadlessMC | \`${hmc}\` |"
@@ -1182,72 +1158,41 @@ stage_quest_export() {
 
 write_site_config() {
   local site_dir="${SITE_OUTPUT_DIR:?SITE_OUTPUT_DIR required}"
-  local url="${RECIPE_BOOK_BASE_URL:-}"
+  local recipe_url="${RECIPE_BOOK_BASE_URL:-}"
+  local guide_url="${FIELD_GUIDE_BASE_URL:-}"
 
   cat > "$site_dir/site-config.json" <<EOF
 {
-  "recipeBookBaseUrl": "${url}"
+  "recipeBookBaseUrl": "${recipe_url}",
+  "fieldGuideBaseUrl": "${guide_url}"
 }
 EOF
-  echo "Wrote site-config.json (recipeBookBaseUrl=${url:-<empty>})"
+  echo "Wrote site-config.json (recipeBookBaseUrl=${recipe_url:-<empty>} fieldGuideBaseUrl=${guide_url:-<empty>})"
 }
 
-optimize_quest_export_icons() {
+verify_staged_quest_icons() {
   local site_dir="${SITE_OUTPUT_DIR:?SITE_OUTPUT_DIR required}"
-  local assets_dir="$site_dir/data/quest-export/assets"
-  local icons_dir="$assets_dir/icons"
+  local icons_dir="$site_dir/data/quest-export/assets/icons"
 
   if [[ ! -d "$icons_dir" ]]; then
-    echo "::error::Missing $icons_dir — quest-export has no icon atlas" >&2
+    echo "::error::Missing $icons_dir — quest-export has no icons" >&2
     return 1
   fi
-  if [[ -f "$icons_dir/items/manifest.json" ]]; then
-    echo "Per-item quest icons — skip atlas WebP optimize"
+
+  local item_png_count
+  item_png_count="$(find "$icons_dir/items" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ "$item_png_count" -ge 1 ]]; then
+    echo "Quest icons: $item_png_count per-item PNG(s) (served as-is)"
     return 0
   fi
-  if [[ ! -f "$assets_dir/bundle.json" ]]; then
-    echo "::warning::Missing $assets_dir/bundle.json — skip icon WebP optimize (needs newer ftb-quest-export)"
-    return 0
-  fi
 
-  if ! command -v npx >/dev/null 2>&1; then
-    echo "::error::npx required for emi-bundle-optimize (setup Node.js in deploy workflow)" >&2
-    return 1
-  fi
-
-  local optimize_tag ver staging
-  optimize_tag="$(resolve_optimize_tag)" || return 1
-  ver="${optimize_tag#v}"
-  staging="$(mktemp -d)"
-
-  echo "::group::emi-bundle-optimize quest icons @ ${optimize_tag}"
-  if ! npx --yes "emi-bundle-optimize@${ver}" optimize \
-    --in "$assets_dir" \
-    --out "$staging/assets-opt" \
-    --force \
-    --no-recipe-webp; then
-    rm -rf "$staging"
-    echo "::error::emi-bundle-optimize failed for $assets_dir" >&2
-    return 1
-  fi
-  echo "::endgroup::"
-
-  rm -rf "$assets_dir"
-  mv "$staging/assets-opt" "$assets_dir"
-  rm -rf "$staging"
-
-  local first_webp
-  first_webp="$(find "$icons_dir" -maxdepth 1 -name 'atlas-*.webp' | head -1)"
-  if [[ -z "$first_webp" ]]; then
-    echo "::error::No atlas-*.webp under $icons_dir after optimize" >&2
-    return 1
-  fi
-  if compgen -G "$icons_dir/atlas-*.png" > /dev/null; then
-    echo "::error::PNG icon atlases remain under $icons_dir after optimize" >&2
-    return 1
-  fi
-
-  echo "Quest icon atlases optimized to WebP ($assets_dir)"
+  for icon_file in icons.css index.json; do
+    if [[ ! -f "$icons_dir/$icon_file" ]]; then
+      echo "::error::Missing per-item PNGs and legacy atlas under $icons_dir" >&2
+      return 1
+    fi
+  done
+  echo "Quest icons: legacy atlas layout (served as-is)"
 }
 
 assemble_deploy_site() {
@@ -1256,7 +1201,7 @@ assemble_deploy_site() {
   cp -f "$QBM_ROOT/language.json" "$site_dir/language.json"
   write_site_config
   stage_quest_export
-  optimize_quest_export_icons
+  verify_staged_quest_icons
 
   if ! compgen -G "$site_dir/assets/*.js" > /dev/null; then
     echo "::error::Missing $site_dir/assets/*.js — quest site release may be corrupt" >&2
@@ -1286,7 +1231,7 @@ Granular (local debugging):
   env, print-versions, checkout-modpack, prepare-bundle-id, export-languages,
   install-mods, setup-hmc, launch-export, write-export-meta,
   resolve-bundle-id, extract-bundle, fetch-bundle,
-  fetch-quest-site, optimize-quest-icons, assemble-deploy-site,
+  fetch-quest-site, verify-staged-quest-icons, assemble-deploy-site,
   check-build-changes, probe-site-release, finalize-deploy-decision
 EOF
 }
@@ -1329,9 +1274,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       load_config
       fetch_quest_site_release "$@"
       ;;
-    optimize-quest-icons)
+    verify-staged-quest-icons|optimize-quest-icons)
       load_config
-      optimize_quest_export_icons "$@"
+      verify_staged_quest_icons "$@"
       ;;
     assemble-deploy-site)
       load_config
