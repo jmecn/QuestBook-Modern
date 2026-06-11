@@ -863,7 +863,7 @@ EOF
   fi
 }
 
-# Chapter icon atlas + global shape-atlas layout (replaces legacy assets/icons/items/).
+# Chapter quest icon atlases + global UI atlas (replaces legacy assets/icons/items/).
 verify_quest_icon_atlases() {
   local quest="${1:?quest-export root required}"
 
@@ -873,8 +873,8 @@ verify_quest_icon_atlases() {
     return 1
   fi
 
-  if [[ ! -f "$quest/quests/shape-atlas.png" ]]; then
-    echo "::error::Missing $quest/quests/shape-atlas.png" >&2
+  if [[ ! -f "$quest/quests/global-atlas.png" ]]; then
+    echo "::error::Missing $quest/quests/global-atlas.png" >&2
     return 1
   fi
 
@@ -899,29 +899,46 @@ quest = Path(sys.argv[1])
 chapter_atlas_count = int(sys.argv[2])
 
 index = json.loads((quest / "quests/index.json").read_text(encoding="utf-8"))
-shape = index.get("shapeAtlas")
-if not shape:
-    raise SystemExit(f"::error::quests/index.json missing shapeAtlas")
+global_atlas = index.get("globalAtlas")
+if not global_atlas:
+    raise SystemExit("::error::quests/index.json missing globalAtlas")
 
 for key in ("src", "width", "height", "missingIconId", "sprites"):
-    if key not in shape:
-        raise SystemExit(f"::error::shapeAtlas missing {key}")
+    if key not in global_atlas:
+        raise SystemExit(f"::error::globalAtlas missing {key}")
 
-missing_id = shape["missingIconId"]
+missing_id = global_atlas["missingIconId"]
 if missing_id != "fqe:missing_icon":
-    raise SystemExit(f"::error::shapeAtlas.missingIconId must be fqe:missing_icon (got: {missing_id})")
+    raise SystemExit(f"::error::globalAtlas.missingIconId must be fqe:missing_icon (got: {missing_id})")
 
-sprites = shape["sprites"]
+sprites = global_atlas["sprites"]
 if missing_id not in sprites:
-    raise SystemExit(f"::error::shapeAtlas.sprites missing {missing_id}")
+    raise SystemExit(f"::error::globalAtlas.sprites missing {missing_id}")
 
 rect = sprites[missing_id]
 if rect.get("w") != 16 or rect.get("h") != 16:
-    raise SystemExit(f"::error::{missing_id} must be 16x16 in shape atlas index")
+    raise SystemExit(f"::error::{missing_id} must be 16x16 in global atlas index")
 
-shape_png = quest / shape["src"]
-if not shape_png.is_file():
-    raise SystemExit(f"::error::shape atlas file missing: {shape_png}")
+atlas_png = quest / global_atlas["src"]
+if not atlas_png.is_file():
+    raise SystemExit(f"::error::global atlas file missing: {atlas_png}")
+
+chapters = index.get("chapters") or []
+if not chapters:
+    raise SystemExit("::error::index.json has no chapters")
+
+with_icon = [c for c in chapters if c.get("icon") and (c.get("iconDisplay") or {}).get("spriteId")]
+if not with_icon:
+    raise SystemExit("::error::index chapters missing iconDisplay for sidebar icons")
+
+sample_filename = with_icon[0]["filename"]
+expected_sprite = f"chapter:{sample_filename}"
+if with_icon[0]["iconDisplay"]["spriteId"] != expected_sprite:
+    raise SystemExit(
+        f"::error::chapter iconDisplay.spriteId must be chapter:{{filename}} (got: {with_icon[0]['iconDisplay']['spriteId']})"
+    )
+if expected_sprite not in sprites:
+    raise SystemExit(f"::error::globalAtlas.sprites missing {expected_sprite}")
 
 chapters_dir = quest / "quests/chapters"
 chapter_jsons = sorted(chapters_dir.glob("*.json"))
@@ -940,10 +957,11 @@ if quests and not (quests[0].get("iconDisplay") or {}).get("spriteId"):
 manifest = json.loads((quest / "manifest.json").read_text(encoding="utf-8"))
 cia = manifest.get("chapterIconAtlases") or {}
 sprites_packed = int(cia.get("spritesPacked") or 0)
+ga = manifest.get("globalAtlas") or {}
 
 print(
-    f"quest icons: shape-atlas + {chapter_atlas_count} chapter atlas PNG(s), "
-    f"{sprites_packed} sprites packed, shape layers={len(sprites)}"
+    f"quest icons: global-atlas ({len(sprites)} sprites, {len(with_icon)} chapter icons) + "
+    f"{chapter_atlas_count} chapter quest atlas PNG(s), {sprites_packed} quest sprites packed"
 )
 PY
 }
