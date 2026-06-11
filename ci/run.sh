@@ -863,6 +863,91 @@ EOF
   fi
 }
 
+# Chapter icon atlas + global shape-atlas layout (replaces legacy assets/icons/items/).
+verify_quest_icon_atlases() {
+  local quest="${1:?quest-export root required}"
+
+  if [[ -f "$quest/assets/icons/items/manifest.json" ]] \
+      || find "$quest/assets/icons/items" -name '*.png' 2>/dev/null | grep -q .; then
+    echo "::error::Legacy per-item icons under $quest/assets/icons/items — re-export with current ftb-quest-export" >&2
+    return 1
+  fi
+
+  if [[ ! -f "$quest/quests/shape-atlas.png" ]]; then
+    echo "::error::Missing $quest/quests/shape-atlas.png" >&2
+    return 1
+  fi
+
+  if [[ ! -f "$quest/quests/index.json" ]]; then
+    echo "::error::Missing $quest/quests/index.json" >&2
+    return 1
+  fi
+
+  local chapter_atlas_count
+  chapter_atlas_count="$(find "$quest/quests/chapters" -maxdepth 1 -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ "$chapter_atlas_count" -lt 1 ]]; then
+    echo "::error::No chapter icon atlases under $quest/quests/chapters/*.png" >&2
+    return 1
+  fi
+
+  python3 - "$quest" "$chapter_atlas_count" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+quest = Path(sys.argv[1])
+chapter_atlas_count = int(sys.argv[2])
+
+index = json.loads((quest / "quests/index.json").read_text(encoding="utf-8"))
+shape = index.get("shapeAtlas")
+if not shape:
+    raise SystemExit(f"::error::quests/index.json missing shapeAtlas")
+
+for key in ("src", "width", "height", "missingIconId", "sprites"):
+    if key not in shape:
+        raise SystemExit(f"::error::shapeAtlas missing {key}")
+
+missing_id = shape["missingIconId"]
+if missing_id != "fqe:missing_icon":
+    raise SystemExit(f"::error::shapeAtlas.missingIconId must be fqe:missing_icon (got: {missing_id})")
+
+sprites = shape["sprites"]
+if missing_id not in sprites:
+    raise SystemExit(f"::error::shapeAtlas.sprites missing {missing_id}")
+
+rect = sprites[missing_id]
+if rect.get("w") != 16 or rect.get("h") != 16:
+    raise SystemExit(f"::error::{missing_id} must be 16x16 in shape atlas index")
+
+shape_png = quest / shape["src"]
+if not shape_png.is_file():
+    raise SystemExit(f"::error::shape atlas file missing: {shape_png}")
+
+chapters_dir = quest / "quests/chapters"
+chapter_jsons = sorted(chapters_dir.glob("*.json"))
+if not chapter_jsons:
+    raise SystemExit(f"::error::No chapter JSON under {chapters_dir}")
+
+sample = json.loads(chapter_jsons[0].read_text(encoding="utf-8"))
+for key in ("iconAtlases", "iconSprites"):
+    if key not in sample:
+        raise SystemExit(f"::error::{chapter_jsons[0].name} missing {key}")
+
+quests = sample.get("quests") or []
+if quests and not (quests[0].get("iconDisplay") or {}).get("spriteId"):
+    raise SystemExit(f"::error::{chapter_jsons[0].name} quests[0] missing iconDisplay.spriteId")
+
+manifest = json.loads((quest / "manifest.json").read_text(encoding="utf-8"))
+cia = manifest.get("chapterIconAtlases") or {}
+sprites_packed = int(cia.get("spritesPacked") or 0)
+
+print(
+    f"quest icons: shape-atlas + {chapter_atlas_count} chapter atlas PNG(s), "
+    f"{sprites_packed} sprites packed, shape layers={len(sprites)}"
+)
+PY
+}
+
 verify_quest_export() {
   local quest="${EXPORT_QUEST:?EXPORT_QUEST required}"
 
@@ -887,45 +972,10 @@ verify_quest_export() {
     fi
   done
 
-  if [[ ! -d "$quest/assets/icons" ]]; then
-    echo "::error::Missing $quest/assets/icons — re-export with ftb-quest-export"
-    exit 1
-  fi
-
-  local item_png_count
-  item_png_count="$(find "$quest/assets/icons/items" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
-
-  if [[ -f "$quest/assets/icons/items/manifest.json" ]]; then
-    local manifest_count
-    manifest_count="$(python3 -c "import json; print(json.load(open('$quest/assets/icons/items/manifest.json')).get('count', 0))")"
-    if [[ "$item_png_count" -lt 1 ]]; then
-      echo "::error::Missing per-item PNGs under $quest/assets/icons/items"
-      exit 1
-    fi
-    if [[ "$manifest_count" -lt 1 ]]; then
-      echo "::error::icons/items/manifest.json has no items"
-      exit 1
-    fi
-    echo "quest icons: per-item PNG layout ($item_png_count files, manifest count=$manifest_count)"
-  elif [[ "$item_png_count" -ge 1 ]]; then
-    echo "quest icons: per-item PNG layout ($item_png_count files)"
-  else
-    for icon_file in icons.css index.json; do
-      if [[ ! -f "$quest/assets/icons/$icon_file" ]]; then
-        echo "::error::Missing $quest/assets/icons/$icon_file"
-        exit 1
-      fi
-    done
-
-    if ! grep -qF -- '--atlas-w:' "$quest/assets/icons/icons.css"; then
-      echo "::error::icons.css missing sprite CSS variables (--atlas-w)"
-      exit 1
-    fi
-    echo "quest icons: legacy atlas layout"
-  fi
+  verify_quest_icon_atlases "$quest"
 
   echo "quest-export OK: $quest"
-  du -sh "$quest" "$quest/assets" "$quest/lang" "$quest/quests" "$quest/assets/icons" 2>/dev/null || true
+  du -sh "$quest" "$quest/assets" "$quest/lang" "$quest/quests" "$quest/quests/chapters" 2>/dev/null || true
 }
 
 launch_export() {
@@ -1225,27 +1275,14 @@ EOF
 
 verify_staged_quest_icons() {
   local site_dir="${SITE_OUTPUT_DIR:?SITE_OUTPUT_DIR required}"
-  local icons_dir="$site_dir/data/quest-export/assets/icons"
+  local quest="$site_dir/data/quest-export"
 
-  if [[ ! -d "$icons_dir" ]]; then
-    echo "::error::Missing $icons_dir — quest-export has no icons" >&2
+  if [[ ! -f "$quest/manifest.json" ]]; then
+    echo "::error::Missing $quest/manifest.json — stage quest-export first" >&2
     return 1
   fi
 
-  local item_png_count
-  item_png_count="$(find "$icons_dir/items" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
-  if [[ "$item_png_count" -ge 1 ]]; then
-    echo "Quest icons: $item_png_count per-item PNG(s) (served as-is)"
-    return 0
-  fi
-
-  for icon_file in icons.css index.json; do
-    if [[ ! -f "$icons_dir/$icon_file" ]]; then
-      echo "::error::Missing per-item PNGs and legacy atlas under $icons_dir" >&2
-      return 1
-    fi
-  done
-  echo "Quest icons: legacy atlas layout (served as-is)"
+  verify_quest_icon_atlases "$quest"
 }
 
 assemble_deploy_site() {
