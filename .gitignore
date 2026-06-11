@@ -8,6 +8,7 @@ build.json
 headlessmc-launcher-*.jar
 ftb-quest-export-*.jar
 HeadlessMC/
+ci-debug/
 
 # Deploy staging (React site tarball extracted here)
 site/**

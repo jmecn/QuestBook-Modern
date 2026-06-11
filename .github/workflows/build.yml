@@ -189,6 +189,18 @@ jobs:
             quest-export-${{ steps.metadata.outputs.bundle_id }}.tar.gz
           key: ${{ steps.metadata.outputs.export_cache_key }}
 
+      - name: Collect debug
+        if: failure()
+        run: bash ci/run.sh collect-export-debug
+
+      - name: Upload debug
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-debug
+          path: ci-debug/
+          if-no-files-found: ignore
+
   deploy:
     needs: [check, export]
     if: >-

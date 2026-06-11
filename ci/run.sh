@@ -568,7 +568,8 @@ load_config() {
   export FQE_REPO FQE_VERSION
   export SITE_VIEWER_REPO SITE_VIEWER_VERSION NODE_VERSION
   export EXPORT_WARMUP_TICKS EXPORT_WORLD_DELAY_TICKS EXPORT_TIMEOUT_SECONDS
-  export EXPORT_ROOT EXPORT_QUEST EXPORT_ROOT_DIR QUEST_SUBDIR SITE_OUTPUT_DIR RECIPE_BOOK_BASE_URL
+  export EXPORT_ROOT EXPORT_QUEST EXPORT_ROOT_DIR QUEST_SUBDIR SITE_OUTPUT_DIR
+  export RECIPE_BOOK_BASE_URL FIELD_GUIDE_BASE_URL SITE_BASE_URL
   export EXPORT_ARTIFACT_NAME="${EXPORT_ARTIFACT_NAME:-quest-book}"
 
   if [[ -n "${GITHUB_ENV:-}" ]]; then
@@ -599,6 +600,8 @@ load_config() {
       printf 'EXPORT_QUEST=%s\n' "$EXPORT_QUEST"
       printf 'SITE_OUTPUT_DIR=%s\n' "${SITE_OUTPUT_DIR:-site}"
       printf 'RECIPE_BOOK_BASE_URL=%s\n' "${RECIPE_BOOK_BASE_URL:-}"
+      printf 'FIELD_GUIDE_BASE_URL=%s\n' "${FIELD_GUIDE_BASE_URL:-}"
+      printf 'SITE_BASE_URL=%s\n' "${SITE_BASE_URL:-}"
       printf 'EXPORT_ARTIFACT_NAME=%s\n' "${EXPORT_ARTIFACT_NAME:-quest-book}"
     } >> "$GITHUB_ENV"
   fi
@@ -970,6 +973,54 @@ finalize_export() {
   ls -lh "$archive"
 }
 
+collect_export_debug() {
+  load_config
+
+  local mp="${MODPACK_DIR:-$QBM_ROOT/Modpack-Modern}"
+  local out="$QBM_ROOT/ci-debug"
+  local quest="${EXPORT_QUEST:?EXPORT_QUEST required}"
+
+  rm -rf "$out"
+  mkdir -p "$out"
+
+  if [[ -d "$mp/logs" ]]; then
+    mkdir -p "$out/modpack/logs"
+    for f in "$mp/logs"/*; do
+      [[ -f "$f" ]] || continue
+      local base
+      base=$(basename "$f")
+      if [[ "$base" == latest.log ]] || [[ $(stat -c%s "$f" 2>/dev/null || stat -f%z "$f") -lt 5242880 ]]; then
+        cp -a "$f" "$out/modpack/logs/"
+      fi
+    done
+  fi
+
+  if [[ -d "$mp/crash-reports" ]]; then
+    cp -a "$mp/crash-reports" "$out/modpack/"
+  fi
+
+  if [[ -f "$quest/manifest.json" ]]; then
+    mkdir -p "$out/export/quest-export"
+    cp "$quest/manifest.json" "$out/export/quest-export/"
+    if [[ -f "$quest/meta.json" ]]; then
+      cp "$quest/meta.json" "$out/export/quest-export/"
+    fi
+    du -sh "$quest" > "$out/export/quest-export-size.txt" 2>/dev/null || true
+    find "$quest" -type f 2>/dev/null | head -200 > "$out/export/quest-export-file-sample.txt" || true
+  fi
+
+  if [[ -d "$QBM_ROOT/export-meta" ]]; then
+    cp -a "$QBM_ROOT/export-meta" "$out/"
+  fi
+
+  if [[ -z "$(find "$out" -type f 2>/dev/null | head -1)" ]]; then
+    echo "no debug files collected" > "$out/README.txt"
+  fi
+
+  echo "debug files under $out:"
+  find "$out" -type f | head -50
+}
+
 prepare_deploy() {
   load_config
   resolve_bundle_id
@@ -1158,16 +1209,18 @@ stage_quest_export() {
 
 write_site_config() {
   local site_dir="${SITE_OUTPUT_DIR:?SITE_OUTPUT_DIR required}"
+  local site_url="${SITE_BASE_URL:-}"
   local recipe_url="${RECIPE_BOOK_BASE_URL:-}"
   local guide_url="${FIELD_GUIDE_BASE_URL:-}"
 
   cat > "$site_dir/site-config.json" <<EOF
 {
+  "siteBaseUrl": "${site_url}",
   "recipeBookBaseUrl": "${recipe_url}",
   "fieldGuideBaseUrl": "${guide_url}"
 }
 EOF
-  echo "Wrote site-config.json (recipeBookBaseUrl=${recipe_url:-<empty>} fieldGuideBaseUrl=${guide_url:-<empty>})"
+  echo "Wrote site-config.json (siteBaseUrl=${site_url:-<empty>} recipeBookBaseUrl=${recipe_url:-<empty>} fieldGuideBaseUrl=${guide_url:-<empty>})"
 }
 
 verify_staged_quest_icons() {
@@ -1232,7 +1285,8 @@ Granular (local debugging):
   install-mods, setup-hmc, launch-export, write-export-meta,
   resolve-bundle-id, extract-bundle, fetch-bundle,
   fetch-quest-site, verify-staged-quest-icons, assemble-deploy-site,
-  check-build-changes, probe-site-release, finalize-deploy-decision
+  check-build-changes, probe-site-release, finalize-deploy-decision,
+  collect-export-debug
 EOF
 }
 
@@ -1283,6 +1337,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
       assemble_deploy_site "$@"
       ;;
     build-site) build_site "$@" ;;
+    collect-export-debug) collect_export_debug "$@" ;;
     -h|--help|help) usage ;;
     *)
       echo "::error::Unknown command: $cmd" >&2
